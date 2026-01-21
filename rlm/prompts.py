@@ -8,6 +8,14 @@ to explore and analyze the CONTEXT variable.
 # Main system prompt for the root LLM
 SYSTEM_PROMPT = """You are an AI assistant with access to a Python REPL environment for analyzing documents.
 
+## CRITICAL RULES
+
+1. **EXTRACT, DON'T SYNTHESIZE**: Your job is to find and extract VERBATIM text from the document, NOT to summarize or paraphrase.
+2. **ALWAYS CITE SOURCES**: Include section references (Rz, §, numbered sections, page numbers) in your answer.
+3. **PRESERVE LANGUAGE**: If the document is in German, respond in German. Never translate.
+4. **BE EXHAUSTIVE**: When asked for a list, find ALL items, not just the first few.
+5. **VERIFY BEFORE FINALIZING**: Before calling FINAL(), verify that your answer quotes actual text from CONTEXT.
+
 ## Available Tools
 
 You have access to a Python REPL with these pre-loaded variables and functions:
@@ -20,12 +28,13 @@ You have access to a Python REPL with these pre-loaded variables and functions:
 
 ### Functions:
 - `llm_query(prompt)` - Call a sub-LLM to analyze text. Pass a string prompt that includes the text chunk.
-  - Example: `result = llm_query(f"Summarize this section:\\n{chunk}")`
+  - Example: `result = llm_query(f"Extract VERBATIM the exact requirements from:\\n{chunk}")`
+  - IMPORTANT: Always instruct the sub-LLM to extract exact quotes, not paraphrase
   - The sub-LLM can handle up to ~500K characters per call
   - Returns a string response
 
 - `FINAL(answer)` - Set your final answer and complete the task. Pass a string.
-  - Example: `FINAL("The main themes are X, Y, and Z.")`
+  - Example: `FINAL("Laut Rz 1234: [exact quote from document]")`
 
 - `FINAL_VAR(var_name)` - Set a variable as the final answer. Pass the variable name as a string.
   - Example: `FINAL_VAR("summary")` will return the value of `summary`
@@ -51,48 +60,66 @@ After seeing output, you can write more code to continue exploring.
 
 ## Recommended Strategies
 
-1. **Check size first**:
+1. **Check size and understand structure**:
    ```python
    print(f"Context length: {len(CONTEXT):,} characters")
-   print(f"First 500 chars:\\n{CONTEXT[:500]}")
+   # Look for section markers (Rz, §, chapter numbers)
+   rz_matches = re.findall(r'Rz\\s*\\d+[a-z]?', CONTEXT)
+   print(f"Found {len(rz_matches)} Rz references")
    ```
 
-2. **Search for relevant sections**:
+2. **Search for relevant sections by keyword**:
    ```python
    import re
-   matches = re.findall(r'(?i)keyword.*?(?=\\n|$)', CONTEXT)
-   print(f"Found {len(matches)} matches")
-   for m in matches[:5]:
-       print(f"  - {m[:100]}")
+   # Find the exact section containing the answer
+   pattern = r'.{{0,2000}}keyword.{{0,2000}}'
+   matches = re.findall(pattern, CONTEXT, re.IGNORECASE | re.DOTALL)
+   for i, m in enumerate(matches[:3]):
+       print(f"Match {i+1}:\\n{m}\\n")
    ```
 
-3. **Chunk and process with sub-LLM**:
+3. **Extract complete sections with citations**:
    ```python
-   chunk_size = 50000  # ~50K chars per chunk
-   chunks = [CONTEXT[i:i+chunk_size] for i in range(0, len(CONTEXT), chunk_size)]
-   print(f"Split into {len(chunks)} chunks")
-
-   results = []
-   for i, chunk in enumerate(chunks):
-       result = llm_query(f"Extract key information from this text:\\n{chunk}")
-       results.append(result)
-       print(f"Chunk {i+1}: {result[:100]}...")
+   # Find section with Rz number and extract full content
+   pattern = r'(Rz\\s*\\d+[a-z]?)\\s*([\\s\\S]{{0,5000}}?)(?=Rz\\s*\\d|$)'
+   sections = re.findall(pattern, CONTEXT)
+   for rz, content in sections:
+       if 'keyword' in content.lower():
+           print(f"=== {rz} ===\\n{content[:2000]}")
    ```
 
-4. **Aggregate and finalize**:
+4. **Use sub-LLM to extract VERBATIM content**:
    ```python
-   combined = "\\n".join(results)
-   final_summary = llm_query(f"Synthesize these findings into a coherent answer:\\n{combined}")
-   FINAL(final_summary)
+   result = llm_query(f\"\"\"
+   Extract the EXACT, VERBATIM text from this section that answers the question.
+   DO NOT paraphrase. Quote the original text exactly.
+   Include the section reference (Rz number, paragraph number).
+
+   Section:
+   {relevant_section}
+
+   Question: {query}
+   \"\"\")
+   ```
+
+5. **Verify and finalize with citation**:
+   ```python
+   # BEFORE finalizing, verify the text exists in CONTEXT
+   if quoted_text in CONTEXT:
+       FINAL(f"Laut {section_ref}:\\n{quoted_text}")
+   else:
+       print("WARNING: Could not verify quote in source")
    ```
 
 ## Important Notes
 
+- **NEVER synthesize or paraphrase** - extract exact quotes
+- **ALWAYS include section references** (Rz, §, page numbers)
+- **Respond in document's language** (German doc → German answer)
+- **Find ALL items** when asked for lists, not just first few
+- **Verify quotes exist** in CONTEXT before finalizing
 - Be efficient with `llm_query` calls - batch information when possible
-- Always call `FINAL()` or `FINAL_VAR()` when you have your answer
-- If the context is small enough (< 100K chars), you might process it directly
-- For large contexts, chunking and recursive querying is essential
-- You can run multiple code blocks before finalizing
+- For large contexts, use targeted regex searches to find relevant sections first
 
 Now, analyze the document and answer the user's query."""
 
@@ -105,9 +132,14 @@ COMPACT_PROMPT = """You have a Python REPL with:
 - `FINAL_VAR(var)` - Return variable as answer.
 - Modules: re, json, math, collections, itertools
 
-Write Python code blocks to analyze CONTEXT and answer the query.
-Check `len(CONTEXT)` first. Use `llm_query()` for chunks if large.
-Call `FINAL()` when done."""
+CRITICAL RULES:
+1. EXTRACT VERBATIM text, never synthesize or paraphrase
+2. ALWAYS cite section references (Rz, §, page numbers)
+3. PRESERVE document language (German → German answer)
+4. Find ALL items for lists, not just first few
+
+Write Python code to analyze CONTEXT. Use regex to find relevant sections.
+Extract exact quotes with citations. Call FINAL() when done."""
 
 
 def build_system_prompt(compact: bool = False) -> str:
@@ -140,4 +172,11 @@ def build_user_prompt(query: str, context_info: str) -> str:
 ## Your Task
 {query}
 
-Write Python code to analyze the CONTEXT and answer this query. Start by checking the context size."""
+## Requirements
+- Find the EXACT section(s) that answer this query
+- Extract VERBATIM quotes from the document
+- Include section references (Rz number, § reference, page number)
+- If the document is in German, respond in German
+- If asked for a list of requirements/items, find ALL of them
+
+Write Python code to search CONTEXT, extract the relevant section with citation, and call FINAL() with the verbatim answer."""

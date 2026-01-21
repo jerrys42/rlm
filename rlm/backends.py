@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Callable, Protocol, runtime_checkable
 
+from .pricing import get_model_pricing, PRICING
+
 
 @dataclass
 class LLMResponse:
@@ -23,6 +25,11 @@ class LLMResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float = 0.0
+
+    @property
+    def pricing_info(self) -> dict:
+        """Get pricing rates used for this response."""
+        return get_model_pricing(self.model)
 
 
 @runtime_checkable
@@ -44,15 +51,6 @@ class AnthropicBackend:
 
     Requires: pip install anthropic
     """
-
-    # Pricing per 1M tokens (as of 2025)
-    PRICING = {
-        'claude-opus-4-20250514': {'input': 15.0, 'output': 75.0},
-        'claude-sonnet-4-20250514': {'input': 3.0, 'output': 15.0},
-        'claude-haiku-3-20250813': {'input': 0.25, 'output': 1.25},
-        # Fallback for unknown models
-        'default': {'input': 3.0, 'output': 15.0},
-    }
 
     def __init__(
         self,
@@ -80,8 +78,8 @@ class AnthropicBackend:
         self.max_tokens = max_tokens
 
     def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Calculate cost for a request."""
-        pricing = self.PRICING.get(model, self.PRICING['default'])
+        """Calculate cost for a request using centralized pricing."""
+        pricing = get_model_pricing(model)
         input_cost = (input_tokens / 1_000_000) * pricing['input']
         output_cost = (output_tokens / 1_000_000) * pricing['output']
         return input_cost + output_cost

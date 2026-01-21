@@ -14,6 +14,7 @@ from typing import Callable, Any
 from .repl import REPLEnv, REPLResult
 from .backends import LLMBackend, LLMResponse
 from .prompts import build_system_prompt, build_user_prompt
+from .pricing import CostTracker, get_model_pricing
 
 
 @dataclass
@@ -26,6 +27,7 @@ class RLMStats:
     total_output_tokens: int = 0
     total_cost: float = 0.0
     execution_time: float = 0.0
+    cost_tracker: CostTracker = field(default_factory=CostTracker)
 
 
 @dataclass
@@ -121,6 +123,11 @@ class RLM:
                 self._stats.total_input_tokens += response.input_tokens
                 self._stats.total_output_tokens += response.output_tokens
                 self._stats.total_cost += response.cost
+                self._stats.cost_tracker.add(
+                    model=self.recursive_model,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                )
 
             return response.content
 
@@ -188,6 +195,11 @@ class RLM:
                 self._stats.total_input_tokens += response.input_tokens
                 self._stats.total_output_tokens += response.output_tokens
                 self._stats.total_cost += response.cost
+                self._stats.cost_tracker.add(
+                    model=self.model,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                )
 
                 llm_response = response.content
                 self._log(f"LLM response ({len(llm_response)} chars)")
@@ -415,4 +427,13 @@ class RLM:
             "total_output_tokens": self._stats.total_output_tokens,
             "total_cost_usd": round(self._stats.total_cost, 4),
             "execution_time_seconds": round(self._stats.execution_time, 2),
+            "by_model": self._stats.cost_tracker.by_model(),
         }
+
+    def print_cost_breakdown(self) -> None:
+        """Print detailed cost breakdown to stdout."""
+        if not self._stats:
+            print("No stats available")
+            return
+
+        print(self._stats.cost_tracker.summary())

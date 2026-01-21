@@ -30,6 +30,7 @@ from .backends import (
     CallbackBackend,
     create_backend,
 )
+from .pricing import CostTracker, TokenUsage, PRICING, get_model_pricing
 
 __version__ = "0.1.0"
 __author__ = "Based on MIT CSAIL research by Alex L. Zhang, Tim Kraska, and Omar Khattab"
@@ -50,4 +51,9 @@ __all__ = [
     "OpenAICompatibleBackend",
     "CallbackBackend",
     "create_backend",
+    # Pricing
+    "CostTracker",
+    "TokenUsage",
+    "PRICING",
+    "get_model_pricing",
 ]

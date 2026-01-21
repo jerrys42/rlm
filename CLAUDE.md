@@ -2,6 +2,21 @@
 
 This file provides context for Claude Code sessions working on this project.
 
+## 📚 Continuation Documents (Read First!)
+
+If continuing RLM development after context clear:
+
+| Document | Purpose |
+|----------|---------|
+| `docs/SESSION_REFERENCE.md` | **Quick start for new session** |
+| `docs/RLM_ROADMAP.md` | Full PRD, phases, tests, deliverables |
+| `docs/RLM_PORTABLE_INSTRUCTIONS.md` | Instructions for claude.ai usage |
+| `~/.claude/subagents/rlm-lessons.md` | Known issues and workarounds |
+
+**Current Focus:** Phase 1 - Verification & Citation System
+
+---
+
 ## Quick Test Command
 
 **To verify the implementation works, run:**
