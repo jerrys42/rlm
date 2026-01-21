@@ -1,0 +1,7 @@
+# RLM - Recursive Language Model
+# Core dependencies
+anthropic>=0.39.0
+httpx>=0.27.0
+
+# Optional: For OpenAI-compatible backends (Ollama, vLLM, LM Studio)
+openai>=1.0.0
