@@ -1,66 +1,83 @@
 #!/usr/bin/env python3
 """
-RLM Search Script - Find relevant sections in large documents.
+RLM Search Script v2 - Find ALL occurrences with accurate positions.
 
 Usage:
-    python search.py <file_path> <keywords...>
-    python search.py document.txt "EUSt-Abzug" "Reparatur" "Voraussetzung"
+    python search.py <file> <keyword1> [keyword2] ...
+    python search.py <file> --count <keyword>           # Just count matches
+    python search.py <file> --all <keyword>             # List all with context
 
-Output:
-    Structured results with section references and context.
+Examples:
+    python search.py doc.txt "Prämie" "Prämien"
+    python search.py doc.txt --count "Prämie"
+    python search.py doc.txt --all "Sachprämie"
 """
 
 import sys
 import re
 from pathlib import Path
+from collections import defaultdict
 
 
-def find_sections(text: str, keywords: list[str], context_chars: int = 2000) -> list[dict]:
-    """Find sections containing all or some keywords."""
-    results = []
+def find_all_matches(text: str, keywords: list[str], context_chars: int = 100) -> list[dict]:
+    """Find ALL occurrences of keywords with position and context."""
+    matches = []
 
-    # Build pattern for any keyword
-    pattern = rf'.{{0,{context_chars}}}({"|".join(re.escape(k) for k in keywords)}).{{0,{context_chars}}}'
+    # Use re.finditer for position tracking
+    pattern = '|'.join(re.escape(k) for k in keywords)
 
-    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+    for m in re.finditer(pattern, text, re.IGNORECASE):
+        pos = m.start()
+        matched_text = m.group()
 
-    for i, match in enumerate(matches[:10]):  # Limit to 10 matches
-        # Try to find Rz reference near the match
-        rz_pattern = r'Rz\s*(\d+[a-z]?)'
-        section_pattern = r'(\d+\.\d+(?:\.\d+)*)'
+        # Extract context
+        ctx_start = max(0, pos - context_chars)
+        ctx_end = min(len(text), pos + len(matched_text) + context_chars)
+        context = text[ctx_start:ctx_end].replace('\n', ' ').strip()
 
-        # Search in surrounding context
-        start = max(0, text.find(match) - 500)
-        end = min(len(text), text.find(match) + len(match) + 500)
-        context = text[start:end]
+        # Find nearest Rz reference (search backwards up to 2000 chars)
+        search_start = max(0, pos - 2000)
+        before_text = text[search_start:pos]
 
-        rz_match = re.search(rz_pattern, context)
-        section_match = re.search(section_pattern, context)
+        rz_match = None
+        for rz in re.finditer(r'Rz\s*(\d+[a-z]?)', before_text):
+            rz_match = rz  # Keep last (nearest) match
 
-        results.append({
-            'index': i + 1,
+        # Find section header
+        section_match = None
+        for sec in re.finditer(r'(\d+\.\d+(?:\.\d+)*\.?\s+[A-ZÄÖÜ][^\n]{0,60})', before_text):
+            section_match = sec
+
+        # Calculate approximate line number
+        line_num = text[:pos].count('\n') + 1
+
+        matches.append({
+            'position': pos,
+            'line': line_num,
+            'matched': matched_text,
             'rz': rz_match.group(1) if rz_match else None,
-            'section': section_match.group(1) if section_match else None,
-            'matched_keyword': match if len(match) < 50 else match[:50],
-            'context_preview': context[:500].replace('\n', ' ')
+            'section': section_match.group(1).strip()[:60] if section_match else None,
+            'context': context
         })
 
-    return results
+    return matches
 
 
-def find_rz_section(text: str, rz_number: str, max_chars: int = 5000) -> str | None:
-    """Extract complete Rz section."""
-    pattern = rf'(Rz\s*{re.escape(rz_number)})\s*([\s\S]{{0,{max_chars}}}?)(?=Rz\s*\d|$)'
-    match = re.search(pattern, text)
-    if match:
-        return f"=== {match.group(1)} ===\n{match.group(2)}"
-    return None
+def group_by_rz(matches: list[dict]) -> dict:
+    """Group matches by Rz number for deduplication."""
+    grouped = defaultdict(list)
+    for m in matches:
+        key = m['rz'] or m['section'] or f"line_{m['line']}"
+        grouped[key].append(m)
+    return dict(grouped)
 
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python search.py <file_path> <keyword1> [keyword2] ...")
-        print("       python search.py <file_path> --rz <rz_number>")
+        print("Usage:")
+        print("  python search.py <file> <keyword1> [keyword2] ...  # Search with grouped results")
+        print("  python search.py <file> --count <keyword>          # Count all occurrences")
+        print("  python search.py <file> --all <keyword>            # List ALL matches")
         sys.exit(1)
 
     file_path = Path(sys.argv[1])
@@ -72,34 +89,70 @@ def main():
     text = file_path.read_text(encoding='utf-8', errors='ignore')
     print(f"Loaded: {len(text):,} characters from {file_path.name}")
 
-    # Check for --rz mode
-    if sys.argv[2] == '--rz' and len(sys.argv) >= 4:
-        rz_number = sys.argv[3]
-        result = find_rz_section(text, rz_number)
-        if result:
-            print(f"\n{result}")
-        else:
-            print(f"Rz {rz_number} not found")
+    # Mode: --count
+    if sys.argv[2] == '--count':
+        keyword = sys.argv[3] if len(sys.argv) > 3 else ''
+        if not keyword:
+            print("ERROR: --count requires a keyword")
+            sys.exit(1)
+        count = len(re.findall(re.escape(keyword), text, re.IGNORECASE))
+        print(f"\nTotal occurrences of '{keyword}': {count}")
         return
 
-    # Keyword search mode
+    # Mode: --all (list every match)
+    if sys.argv[2] == '--all':
+        keywords = sys.argv[3:]
+        if not keywords:
+            print("ERROR: --all requires at least one keyword")
+            sys.exit(1)
+
+        print(f"Searching for: {', '.join(keywords)}")
+        matches = find_all_matches(text, keywords, context_chars=80)
+
+        print(f"\n{'='*70}")
+        print(f"FOUND {len(matches)} TOTAL MATCHES")
+        print('='*70)
+
+        for i, m in enumerate(matches, 1):
+            rz_info = f"Rz {m['rz']}" if m['rz'] else ""
+            sec_info = m['section'] or ""
+            location = rz_info or sec_info or f"Line {m['line']}"
+
+            print(f"\n[{i}] {location} (pos {m['position']:,})")
+            print(f"    Match: \"{m['matched']}\"")
+            print(f"    Context: ...{m['context']}...")
+        return
+
+    # Default mode: grouped search
     keywords = sys.argv[2:]
     print(f"Searching for: {', '.join(keywords)}")
     print("-" * 60)
 
-    results = find_sections(text, keywords)
+    matches = find_all_matches(text, keywords)
 
-    if not results:
-        print("No matches found.")
+    if not matches:
+        print("\nNo matches found.")
         return
 
-    print(f"Found {len(results)} relevant sections:\n")
+    # Group and deduplicate
+    grouped = group_by_rz(matches)
 
-    for r in results:
-        ref = f"Rz {r['rz']}" if r['rz'] else f"Section {r['section']}" if r['section'] else "Unknown"
-        print(f"[{r['index']}] {ref}")
-        print(f"    Preview: {r['context_preview'][:200]}...")
-        print()
+    print(f"\n{'='*60}")
+    print(f"TOTAL MATCHES: {len(matches)} (in {len(grouped)} unique sections)")
+    print('='*60)
+
+    # Print grouped results
+    for i, (key, group) in enumerate(grouped.items(), 1):
+        first = group[0]
+        rz_display = f"Rz {first['rz']}" if first['rz'] else ""
+        sec_display = first['section'] or ""
+
+        header = rz_display if rz_display else sec_display if sec_display else f"Around line {first['line']}"
+
+        print(f"\n[{i}] {header}")
+        print(f"    Matches in this section: {len(group)}")
+        print(f"    Keywords: {', '.join(set(m['matched'] for m in group))}")
+        print(f"    Preview: ...{first['context'][:150]}...")
 
 
 if __name__ == '__main__':
